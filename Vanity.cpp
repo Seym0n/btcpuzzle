@@ -35,6 +35,7 @@ using namespace std;
 
 Point Gn[GRP_SIZE / 2];
 Point _2Gn;
+static bool GnInitialized = false;
 
 VanitySearch::VanitySearch(Secp256K1* secp, vector<std::string>& inputAddresses, int searchMode,
 	bool stop, string outputFile, uint32_t maxFound, BITCRACK_PARAM* bc):inputAddresses(inputAddresses) 
@@ -141,17 +142,20 @@ VanitySearch::VanitySearch(Secp256K1* secp, vector<std::string>& inputAddresses,
 	
 	string searchInfo = string(searchModes[searchMode]);
 
-	// Compute Generator table G[n] = (n+1)*G
-	Point g = secp->G;
-	Gn[0] = g;
-	g = secp->DoubleDirect(g);
-	Gn[1] = g;
-	for (int i = 2; i < GRP_SIZE / 2; i++) {
-		g = secp->AddDirect(g, secp->G);
-		Gn[i] = g;
+	// Compute Generator table G[n] = (n+1)*G — constants, only computed once
+	if (!GnInitialized) {
+		Point g = secp->G;
+		Gn[0] = g;
+		g = secp->DoubleDirect(g);
+		Gn[1] = g;
+		for (int i = 2; i < GRP_SIZE / 2; i++) {
+			g = secp->AddDirect(g, secp->G);
+			Gn[i] = g;
+		}
+		// _2Gn = CPU_GRP_SIZE*G
+		_2Gn = secp->DoubleDirect(Gn[GRP_SIZE / 2 - 1]);
+		GnInitialized = true;
 	}
-	// _2Gn = CPU_GRP_SIZE*G
-	_2Gn = secp->DoubleDirect(Gn[GRP_SIZE / 2 - 1]);
 
 	// Constant for endomorphism
 	// if a is a nth primitive root of unity, a^-1 is also a nth primitive root.

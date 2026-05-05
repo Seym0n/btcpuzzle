@@ -30,6 +30,7 @@
 #include <filesystem>
 #include <thread>
 #include <chrono>
+#include <future>
 #include <regex>
 #include <mutex>
 #include <cstdlib>
@@ -64,6 +65,64 @@ if (gpuId.size() > 0) {
 // File logger
 extern std::mutex logMutex;
 extern void logToFile(int gpuIndex, const std::string & msg);
+
+// ------------------------------------------------------------------------------------------
+
+void parseFile(std::string fileName, std::vector<std::string>& lines);
+
+struct PrefetchedRange {
+	RangeData rangeData;
+	std::vector<std::string> addresses;
+	std::string filePath;
+	bool success = false;
+};
+
+// Fetch next range from pool, write proof file, parse addresses — runs on background thread
+PrefetchedRange fetchNextRange(PoolClient* client) {
+	PrefetchedRange result;
+
+	RangeData range;
+	while (true) {
+		range = client->getRange(0);
+		if (!range.success) {
+			logMessage(DANGER, ("Prefetch API Error: " + range.error).c_str());
+			logMessage(INFO, "Retrying prefetch in 30 seconds...");
+			std::this_thread::sleep_for(std::chrono::seconds(30));
+			continue;
+		}
+		break;
+	}
+
+	result.rangeData = range;
+
+	// Create ranges directory if not exists
+	struct stat st = { 0 };
+	if (stat("ranges", &st) == -1) {
+#ifdef _WIN32
+		_mkdir("ranges");
+#else
+		mkdir("ranges", 0755);
+#endif
+	}
+
+	// Write proof addresses to file
+	std::string filePath = "ranges/" + range.hex + ".txt";
+	result.filePath = filePath;
+
+	std::ofstream out(filePath);
+	if (!out.is_open()) {
+		logMessage(DANGER, ("Prefetch: could not create file: " + filePath).c_str());
+		return result;
+	}
+	for (const auto& addr : range.proofOfWorkAddresses)
+		out << addr << "\n";
+	out << range.targetAddress << "\n";
+	out.close();
+
+	parseFile(filePath, result.addresses);
+	result.success = true;
+	return result;
+}
 
 // ------------------------------------------------------------------------------------------
 
@@ -691,6 +750,22 @@ int main(int argc, char* argv[]) {
 	}
 
 	int loops = 0;
+
+	// PoolClient lives outside the loop — reused across ranges
+	PoolClient client(g_poolConfig);
+	if (g_poolMode) {
+		if (!client.init()) {
+			logMessage(DANGER, "Failed to initialize pool client");
+			client.notifyWorkerStopped();
+			return 1;
+		}
+		client.notifyWorkerStarted();
+	}
+
+	// Prefetch future — carries the next range fetched in background
+	std::future<PrefetchedRange> prefetchFuture;
+	std::string filePathData;
+
 	while (true)
 	{
 
@@ -703,85 +778,44 @@ int main(int argc, char* argv[]) {
 		logMessage(INFO, "[**] Initializing btcpuzzle.info client...");
 
 		RangeData rangeData;
-		RangeData range;
-		PoolClient client(g_poolConfig);
-		std::string filePathData;
 
 		if (g_poolMode) {
-			// Initialize pool client
-			if (!client.init()) {
-				logMessage(DANGER, "Failed to initialize pool client");
-				client.notifyWorkerStopped();
-				return 1;
-			}
+			PrefetchedRange fetched;
 
 			if (loops == 0) {
-				client.notifyWorkerStarted();
+				// First iteration: no prefetch ready, fetch synchronously
+				logMessage(WARNING, "[**] Requesting range from btcpuzzle.info API...");
+				fetched = fetchNextRange(&client);
+			} else {
+				// Subsequent iterations: wait for background prefetch
+				logMessage(WARNING, "[**] Consuming prefetched range...");
+				fetched = prefetchFuture.get();
 			}
 
-			// Get range from pool
-			logMessage(WARNING, "[**] Requesting range from btcpuzzle.info API...");
-
-			while (true) {
-				range = client.getRange(0);
-				rangeData = range;
-
-				if (!range.success) {
-					logMessage(DANGER, ("API Error: " + range.error).c_str());
-					logMessage(INFO, "Retrying in 30 seconds...");
-					std::this_thread::sleep_for(std::chrono::seconds(30));
-					continue;
-				}
-				break;
+			if (!fetched.success) {
+				logMessage(DANGER, "Failed to fetch range, retrying...");
+				prefetchFuture = std::async(std::launch::async, fetchNextRange, &client);
+				continue;
 			}
 
+			rangeData = fetched.rangeData;
+			address = fetched.addresses;
+			filePathData = fetched.filePath;
+
 			printf("========================================\n");
-			printf("[*] Range (HEX): %s\n", range.hex.c_str());
-			printf("[*] Target Address: %s\n", range.targetAddress.c_str());
-			printf("[*] Range Start: %s\n", range.rangeStart.c_str());
-			printf("[*] Range End: %s\n", range.rangeEnd.c_str());
-			printf("[*] Proof addresses: %lu\n", range.proofOfWorkAddresses.size());
+			printf("[*] Range (HEX): %s\n", rangeData.hex.c_str());
+			printf("[*] Target Address: %s\n", rangeData.targetAddress.c_str());
+			printf("[*] Range Start: %s\n", rangeData.rangeStart.c_str());
+			printf("[*] Range End: %s\n", rangeData.rangeEnd.c_str());
+			printf("[*] Proof addresses: %lu\n", rangeData.proofOfWorkAddresses.size());
 			printf("========================================\n");
 
-			// Set keyspace using your existing format
-			getKeySpace(range.hex + range.rangeStart + ":+" + range.rangeEnd, bc, maxKey);
+			logMessage(SUCCESS, ("[++] Address file: " + filePathData).c_str());
+			logMessage(SUCCESS, ("[++] Total addresses: " + std::to_string(rangeData.proofOfWorkAddresses.size() + 1) + "\n").c_str());
+
+			// Set keyspace
+			getKeySpace(rangeData.hex + rangeData.rangeStart + ":+" + rangeData.rangeEnd, bc, maxKey);
 			bc->ksNext.Set(&bc->ksStart);
-
-			// Create ranges directory if not exists
-			struct stat st = { 0 };
-			if (stat("ranges", &st) == -1) {
-#ifdef _WIN32
-				_mkdir("ranges");
-#else
-				mkdir("ranges", 0755);
-#endif
-			}
-
-			// Create file with proof addresses
-			std::string filePath = "ranges/" + range.hex + ".txt";
-			filePathData = filePath;
-
-			std::ofstream out(filePath);
-			if (!out.is_open()) {
-				printf("File could not be created: %s\n", filePath.c_str());
-				client.notifyWorkerStopped();
-				return 1;
-			}
-
-			// Write all proof addresses to file
-			for (const auto& addr : range.proofOfWorkAddresses) {
-				out << addr << "\n";
-			}
-
-			// Add target address to file
-			out << range.targetAddress << "\n";
-
-			out.close();
-			logMessage(SUCCESS, ("[++] Address file created: " + filePath).c_str());
-			logMessage(SUCCESS, ("[++] Total addresses in file: " + std::to_string(range.proofOfWorkAddresses.size() + 1) + "\n").c_str());
-
-			// Parse the address file
-			parseFile(filePath, address);
 		}
 
 		// Check keyspace
@@ -859,6 +893,11 @@ int main(int argc, char* argv[]) {
 		v->Search(gpuId, gridSize);
 
 		if (g_poolMode) {
+			// Launch prefetch for next range immediately — runs concurrently with submitRange
+			prefetchFuture = std::async(std::launch::async, fetchNextRange, &client);
+		}
+
+		if (g_poolMode) {
 			// Check if all proof keys were found
 			if (client.hasAllProofKeys(rangeData)) {
 				logMessage(SUCCESS, "[SUCCESS] All proof keys found!");
@@ -933,6 +972,9 @@ int main(int argc, char* argv[]) {
 				logMessage(DANGER, "Application stopped - incomplete proof keys");
 				client.notifyWorkerStopped();
 
+				if (prefetchFuture.valid())
+					prefetchFuture.wait();
+
 				delete v;
 				return 1;  // Exit program
 			}
@@ -946,8 +988,13 @@ int main(int argc, char* argv[]) {
 		}
 
 		delete v;
+	}
 
-		std::this_thread::sleep_for(std::chrono::seconds(2));
+	if (g_poolMode) {
+		// If a prefetch is in flight when we exit (target found path), cancel it gracefully
+		if (prefetchFuture.valid())
+			prefetchFuture.wait();
+		client.notifyWorkerStopped();
 	}
 
 	return 0;

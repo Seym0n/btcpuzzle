@@ -6,9 +6,9 @@
 #include <iomanip>
 #include <ctime>
 #include <algorithm>
-#include <openssl/sha.h>
-#include <openssl/rsa.h>
+#include <openssl/evp.h>
 #include <openssl/pem.h>
+#include <openssl/rsa.h>
 #include <openssl/err.h>
 #include "Logger.h"
 #include <fstream>
@@ -40,7 +40,7 @@ PoolClient::~PoolClient() {
 		curl_easy_cleanup(curl);
 	}
 	if (publicKey) {
-		RSA_free(publicKey);
+		EVP_PKEY_free(publicKey);
 	}
 	curl_global_cleanup();
 }
@@ -123,14 +123,14 @@ bool PoolClient::loadPublicKeyFromString() {
 	}
 
 	// Read RSA public key
-	publicKey = PEM_read_bio_RSA_PUBKEY(bio, NULL, NULL, NULL);
+	publicKey = PEM_read_bio_PUBKEY(bio, NULL, NULL, NULL);
 	BIO_free(bio);
 
 	if (!publicKey) {
 		logMessage(DANGER, "Failed to parse public key");
 		logMessage(DANGER, "Untrusted mode requires valid public key.");
 		logMessage(DANGER, "Make sure it starts with: -----BEGIN PUBLIC KEY-----");
-		logToFile(config.gpuIndex, "ERROR loadPublicKeyFromString(): Failed to parse public key (PEM_read_bio_RSA_PUBKEY returned null)");
+		logToFile(config.gpuIndex, "ERROR loadPublicKeyFromString(): Failed to parse public key (PEM_read_bio_PUBKEY returned null)");
 		std::cerr << "\n" + config.publicKeyString + "\n\n";
 		return false;
 	}
@@ -166,26 +166,41 @@ std::string PoolClient::encryptData(const std::string& data) {
 		return data;
 	}
 
-	int rsaLen = RSA_size(publicKey);
-	std::vector<unsigned char> encrypted(rsaLen);
-
-	// Encrypt with RSA public key
-	int result = RSA_public_encrypt(
-		data.length(),
-		(unsigned char*)data.c_str(),
-		encrypted.data(),
-		publicKey,
-		RSA_PKCS1_OAEP_PADDING
-	);
-
-	if (result == -1) {
-		std::cerr << "Encryption failed\n";
-		logToFile(config.gpuIndex, "ERROR encryptData(): RSA_public_encrypt failed (result == -1)");
+	EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(publicKey, nullptr);
+	if (!ctx) {
+		logToFile(config.gpuIndex, "ERROR encryptData(): EVP_PKEY_CTX_new failed");
 		return "";
 	}
 
+	if (EVP_PKEY_encrypt_init(ctx) <= 0 ||
+		EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) <= 0) {
+		logToFile(config.gpuIndex, "ERROR encryptData(): Failed to init encryption context");
+		EVP_PKEY_CTX_free(ctx);
+		return "";
+	}
+
+	// Determine output length
+	size_t outLen = 0;
+	if (EVP_PKEY_encrypt(ctx, nullptr, &outLen,
+		(const unsigned char*)data.c_str(), data.length()) <= 0) {
+		logToFile(config.gpuIndex, "ERROR encryptData(): Failed to determine output length");
+		EVP_PKEY_CTX_free(ctx);
+		return "";
+	}
+
+	std::vector<unsigned char> encrypted(outLen);
+	if (EVP_PKEY_encrypt(ctx, encrypted.data(), &outLen,
+		(const unsigned char*)data.c_str(), data.length()) <= 0) {
+		std::cerr << "Encryption failed\n";
+		logToFile(config.gpuIndex, "ERROR encryptData(): EVP_PKEY_encrypt failed");
+		EVP_PKEY_CTX_free(ctx);
+		return "";
+	}
+
+	EVP_PKEY_CTX_free(ctx);
+
 	// Convert to base64
-	return base64Encode(encrypted.data(), result);
+	return base64Encode(encrypted.data(), outLen);
 }
 
 std::string PoolClient::httpGet(const std::string& url,
@@ -361,15 +376,14 @@ std::string PoolClient::calculateProofHash(const std::vector<std::string>& keys)
 	}
 
 	// Calculate SHA256
-	unsigned char hash[SHA256_DIGEST_LENGTH];
-	SHA256_CTX sha256;
-	SHA256_Init(&sha256);
-	SHA256_Update(&sha256, concatenated.c_str(), concatenated.length());
-	SHA256_Final(hash, &sha256);
+	unsigned char hash[EVP_MAX_MD_SIZE];
+	size_t hashLen = 0;
+	EVP_Q_digest(nullptr, "SHA256", nullptr,
+		concatenated.c_str(), concatenated.length(), hash, &hashLen);
 
 	// Convert to hex string
 	std::stringstream ss;
-	for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+	for (size_t i = 0; i < hashLen; i++) {
 		ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
 	}
 

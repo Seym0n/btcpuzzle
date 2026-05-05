@@ -11,9 +11,9 @@
 #include <chrono>
 #include <curl/curl.h>
 #include "PoolConfig.h"
-#include <openssl/sha.h>
-#include <openssl/rsa.h>
+#include <openssl/evp.h>
 #include <openssl/pem.h>
+#include <openssl/rsa.h>
 #include <openssl/err.h>
 
 // Range data received from API
@@ -41,7 +41,7 @@ class PoolClient {
 private:
     PoolConfig config;
     CURL* curl;
-    RSA* publicKey;
+    EVP_PKEY* publicKey;
     void* secureHandler;  // SecureKeyHandler* (forward declaration to avoid circular include)
 
     std::thread pingThread;

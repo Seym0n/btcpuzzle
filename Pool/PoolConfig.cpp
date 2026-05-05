@@ -5,9 +5,7 @@
 #include <sstream>
 #include <iostream>
 #include <algorithm>
-#include <openssl/sha.h>
-#include <openssl/rsa.h>
-#include <openssl/pem.h>
+#include <openssl/evp.h>
 #include <openssl/err.h>
 #include <ctime>
 #include "Logger.h"
@@ -44,22 +42,24 @@ std::string PoolConfig::getSelfHash() {
 
     if (!file) return "";
 
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr);
 
     std::vector<char> buffer(8192);
     while (file.good()) {
         file.read(buffer.data(), buffer.size());
-        SHA256_Update(&ctx, buffer.data(), file.gcount());
+        EVP_DigestUpdate(ctx, buffer.data(), file.gcount());
     }
 
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256_Final(hash, &ctx);
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hashLen = 0;
+    EVP_DigestFinal_ex(ctx, hash, &hashLen);
+    EVP_MD_CTX_free(ctx);
 
     char out[65];
-    for (int i = 0; i < 32; i++)
+    for (unsigned int i = 0; i < hashLen; i++)
         sprintf(out + i * 2, "%02x", hash[i]);
-    out[64] = 0;
+    out[hashLen * 2] = 0;
 
     return std::string(out);
 }
@@ -189,11 +189,13 @@ bool PoolConfig::validate(std::string& error) const {
 }
 
 std::string PoolConfig::sha256(const std::string& input) {
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256((unsigned char*)input.c_str(), input.size(), hash);
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    size_t hashLen = 0;
+    EVP_Q_digest(nullptr, "SHA256", nullptr,
+        input.c_str(), input.size(), hash, &hashLen);
 
     std::stringstream ss;
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+    for (size_t i = 0; i < hashLen; i++)
         ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
 
     return ss.str();
