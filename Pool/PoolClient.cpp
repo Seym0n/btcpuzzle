@@ -446,12 +446,10 @@ bool PoolClient::submitRange(const std::string& hex, const std::vector<std::stri
 
 	if (httpCode != 200) {
 		logToFile(config.gpuIndex, "ERROR submitRange(hex=" + hex + "): HTTP " + std::to_string(httpCode) + " | Response: " + response);
+		return false;
 	}
 
-	if (httpCode == 200) {
-		rangesScanned++;
-	}
-
+	rangesScanned++;
 	return true;
 }
 

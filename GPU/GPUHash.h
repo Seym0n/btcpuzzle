@@ -50,7 +50,7 @@ __device__ __constant__ uint32_t I[] = {
   0x5be0cd19ul,
 };
 
-//#define ASSEMBLY_SIGMA
+#define ASSEMBLY_SIGMA
 #ifdef ASSEMBLY_SIGMA
 
 __device__ __forceinline__ uint32_t S0(uint32_t x) {
@@ -471,7 +471,7 @@ __device__ void RIPEMD160Transform(uint32_t s[5],uint32_t* w) {
 // ---------------------------------------------------------------------------------
 // Key encoding
 // ---------------------------------------------------------------------------------
-__device__ __noinline__ void _GetHash160Comp(uint64_t *x, uint8_t isOdd, uint8_t *hash) {
+__device__ __forceinline__ void _GetHash160Comp(uint64_t *x, uint8_t isOdd, uint8_t *hash) {
 
   uint32_t *x32 = (uint32_t *)(x);
   uint32_t publicKeyBytes[16];
@@ -511,7 +511,7 @@ __device__ __noinline__ void _GetHash160Comp(uint64_t *x, uint8_t isOdd, uint8_t
   RIPEMD160Transform((uint32_t *)hash, s);
 }
 
-__device__ __noinline__ void _GetHash160CompSym(uint64_t* x, uint8_t* h1, uint8_t* h2) {
+__device__ __forceinline__ void _GetHash160CompSym(uint64_t* x, uint8_t* h1, uint8_t* h2) {
 
     uint32_t* x32 = (uint32_t*)(x);
     uint32_t publicKeyBytes[16];
@@ -575,7 +575,7 @@ __device__ __noinline__ void _GetHash160CompSym(uint64_t* x, uint8_t* h1, uint8_
     RIPEMD160Transform((uint32_t*)h2, s);
 }
 
-__device__ __noinline__ void _GetHash160(uint64_t *x, uint64_t *y, uint8_t *hash) {
+__device__ __forceinline__ void _GetHash160(uint64_t *x, uint64_t *y, uint8_t *hash) {
 
   uint32_t *x32 = (uint32_t *)(x);
   uint32_t *y32 = (uint32_t *)(y);
@@ -633,7 +633,7 @@ __device__ __noinline__ void _GetHash160(uint64_t *x, uint64_t *y, uint8_t *hash
   RIPEMD160Transform((uint32_t *)hash, s);
 }
 
-__device__ __noinline__ void _GetHash160P2SHComp(uint64_t *x, uint8_t isOdd, uint8_t *hash) {
+__device__ __forceinline__ void _GetHash160P2SHComp(uint64_t *x, uint8_t isOdd, uint8_t *hash) {
 
   uint32_t h[5];
   uint32_t scriptBytes[16];
@@ -674,7 +674,7 @@ __device__ __noinline__ void _GetHash160P2SHComp(uint64_t *x, uint8_t isOdd, uin
   RIPEMD160Transform((uint32_t *)hash, s);
 }
 
-__device__ __noinline__ void _GetHash160P2SHUncomp(uint64_t *x, uint64_t *y, uint8_t *hash) {
+__device__ __forceinline__ void _GetHash160P2SHUncomp(uint64_t *x, uint64_t *y, uint8_t *hash) {
 
   uint32_t h[5];
   uint32_t scriptBytes[16];

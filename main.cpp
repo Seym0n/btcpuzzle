@@ -204,7 +204,7 @@ void getKeySpace(const string & text, BITCRACK_PARAM * bc, Int & maxKey)
 			for (int i = 0; i < 32; i++)
 			{
 				unsigned char my1ch = 0;
-				if (scanf(&item[2 * i], "%02hhX", &my1ch)) {};
+				if (sscanf(&item[2 * i], "%02hhX", &my1ch)) {};
 				bc->ksFinish.SetByte(31 - i, my1ch);
 			}
 		}
