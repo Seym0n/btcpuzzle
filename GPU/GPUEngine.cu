@@ -55,7 +55,7 @@ __global__ void comp_keys_p2sh(uint32_t mode, address_t* address, uint32_t* look
 }*/
 
 // Andrew kernel, STEP_SIZE not used
-__global__ void comp_keys_comp(address_t* sAddress, uint32_t* lookup32, uint64_t* keys, uint32_t* out) {
+__global__ __launch_bounds__(NUM_THREADS_PER_BLOCK, 2) void comp_keys_comp(address_t* sAddress, uint32_t* lookup32, uint64_t* keys, uint32_t* out) {
 
 	int xPtr = (blockIdx.x * blockDim.x) * 8;
 	int yPtr = xPtr + 4 * blockDim.x;
@@ -455,6 +455,8 @@ GPUEngine::~GPUEngine() {
 	cudaFree(inputKey);
 	cudaFree(inputAddress);
 	if (inputAddressLookUp) cudaFree(inputAddressLookUp);
+	if (inputKeyPinned) cudaFreeHost(inputKeyPinned);
+	if (inputAddressPinned) cudaFreeHost(inputAddressPinned);
 	cudaFreeHost(outputBufferPinned);
 	cudaFree(outputBuffer);
 }
@@ -480,9 +482,6 @@ void GPUEngine::SetAddress(std::vector<address_t> addresses) {
 	// Fill device memory
 	cudaMemcpy(inputAddress, inputAddressPinned, _64K * 2, cudaMemcpyHostToDevice);
 
-	// We do not need the input pinned memory anymore
-	cudaFreeHost(inputAddressPinned);
-	inputAddressPinned = NULL;
 	lostWarning = false;
 
 	cudaError_t err = cudaGetLastError();
@@ -498,9 +497,6 @@ void GPUEngine::SetPattern(const char* pattern) {
 	// Fill device memory
 	cudaMemcpy(inputAddress, inputAddressPinned, _64K * 2, cudaMemcpyHostToDevice);
 
-	// We do not need the input pinned memory anymore
-	cudaFreeHost(inputAddressPinned);
-	inputAddressPinned = NULL;
 	lostWarning = false;
 
 	cudaError_t err = cudaGetLastError();
@@ -546,9 +542,6 @@ void GPUEngine::SetAddress(std::vector<LADDRESS> addresses, uint32_t totalAddres
 	cudaMemcpy(inputAddress, inputAddressPinned, _64K * 2, cudaMemcpyHostToDevice);
 	cudaMemcpy(inputAddressLookUp, inputAddressLookUpPinned, (_64K + totalAddress) * 4, cudaMemcpyHostToDevice);
 
-	// We do not need the input pinned memory anymore
-	cudaFreeHost(inputAddressPinned);
-	inputAddressPinned = NULL;
 	cudaFreeHost(inputAddressLookUpPinned);
 	inputAddressLookUpPinned = NULL;
 	lostWarning = false;
@@ -562,12 +555,16 @@ void GPUEngine::SetAddress(std::vector<LADDRESS> addresses, uint32_t totalAddres
 bool GPUEngine::callKernel() {
 
 	// Reset nbFound
-	cudaMemset(outputBuffer, 0, 4);
-			
-	comp_keys_comp << < numThreadsGPU / NUM_THREADS_PER_BLOCK, NUM_THREADS_PER_BLOCK >> >
-		(inputAddress, inputAddressLookUp, inputKey, outputBuffer);		
+	cudaError_t err = cudaMemset(outputBuffer, 0, 4);
+	if (err != cudaSuccess) {
+		fprintf(stderr, "GPUEngine: cudaMemset: %s\n", cudaGetErrorString(err));
+		return false;
+	}
 
-	cudaError_t err = cudaGetLastError();
+	comp_keys_comp << < numThreadsGPU / NUM_THREADS_PER_BLOCK, NUM_THREADS_PER_BLOCK >> >
+		(inputAddress, inputAddressLookUp, inputKey, outputBuffer);
+
+	err = cudaGetLastError();
 	if (err != cudaSuccess) {
 		fprintf(stderr, "GPUEngine: Kernel: %s\n", cudaGetErrorString(err));
 		return false;
@@ -597,10 +594,6 @@ bool GPUEngine::SetKeys(Point* p) {
 	// Fill device memory
 	cudaMemcpy(inputKey, inputKeyPinned, numThreadsGPU * 32 * 2, cudaMemcpyHostToDevice);
 
-	// We do not need the input pinned memory anymore
-	cudaFreeHost(inputKeyPinned);
-	inputKeyPinned = NULL;
-
 	cudaError_t err = cudaGetLastError();
 	if (err != cudaSuccess) {
 		fprintf(stderr, "GPUEngine: SetKeys: %s\n", cudaGetErrorString(err));
@@ -613,29 +606,8 @@ bool GPUEngine::Launch(std::vector<ITEM>& addressFound, bool spinWait) {
 
 	addressFound.clear();
 
-	// Get the result
-	if (spinWait) {
-
-		cudaMemcpy(outputBufferPinned, outputBuffer, outputSize, cudaMemcpyDeviceToHost);
-	}
-	else {
-
-		// Use cudaMemcpyAsync to avoid default spin wait of cudaMemcpy wich takes 100% CPU
-		cudaEvent_t evt;
-		cudaEventCreate(&evt);
-
-		//cudaMemcpy(outputAddressPinned, outputAddress, 4, cudaMemcpyDeviceToHost);
-		cudaMemcpyAsync(outputBufferPinned, outputBuffer, 4, cudaMemcpyDeviceToHost, 0);
-
-		cudaEventRecord(evt, 0);
-		while (cudaEventQuery(evt) == cudaErrorNotReady) {
-			// Sleep 1 ms to free the CPU
-			Timer::SleepMillis(1);
-		}
-		cudaEventDestroy(evt);
-	}
-
-	cudaError_t err = cudaGetLastError();
+	// Fetch just the count first (4 bytes) — avoids transferring full outputSize when hits are rare
+	cudaError_t err = cudaMemcpy(outputBufferPinned, outputBuffer, 4, cudaMemcpyDeviceToHost);
 	if (err != cudaSuccess) {
 		fprintf(stderr, "GPUEngine: Launch: %s\n", cudaGetErrorString(err));
 		return false;
@@ -652,8 +624,9 @@ bool GPUEngine::Launch(std::vector<ITEM>& addressFound, bool spinWait) {
 		nbFound = maxFound;
 	}
 
-	// When can perform a standard copy, the kernel is eneded
-	cudaMemcpy(outputBufferPinned, outputBuffer, nbFound * ITEM_SIZE + 4, cudaMemcpyDeviceToHost);
+	// Only fetch item data if something was actually found
+	if (nbFound > 0)
+		cudaMemcpy(outputBufferPinned, outputBuffer, nbFound * ITEM_SIZE + 4, cudaMemcpyDeviceToHost);
 
 	for (uint32_t i = 0; i < nbFound; i++) {
 		uint32_t* itemPtr = outputBufferPinned + (i * ITEM_SIZE32 + 1);
