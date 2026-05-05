@@ -45,9 +45,14 @@ VanitySearch::VanitySearch(Secp256K1* secp, vector<std::string>& inputAddresses,
 	this->stopWhenFound = stop;
 	this->outputFile = outputFile;
 	this->numGPUs = 0;
-	this->maxFound = maxFound;	
+	this->maxFound = maxFound;
 	this->searchType = -1;
-	this->bc = bc;	
+	this->bc = bc;
+	this->startTime = 0.0;
+	this->endOfSearch = false;
+	this->nbFoundKey = 0;
+	this->useSSE = true;
+	memset(this->counters, 0, sizeof(this->counters));
 	
 	addresses.clear();
 
@@ -114,16 +119,13 @@ VanitySearch::VanitySearch(Secp256K1* secp, vector<std::string>& inputAddresses,
 	uint32_t maxI = 0;
 	for (int i = 0; i < (int)addresses.size(); i++) 
 	{
-		if (addresses[i].items) 
+		if (addresses[i].items)
 		{
 			LADDRESS lit;
 			lit.sAddress = i;
-			if (addresses[i].items) 
+			for (int j = 0; j < (int)addresses[i].items->size(); j++)
 			{
-				for (int j = 0; j < (int)addresses[i].items->size(); j++) 
-				{
-					lit.lAddresses.push_back((*addresses[i].items)[j].lAddress);
-				}
+				lit.lAddresses.push_back((*addresses[i].items)[j].lAddress);
 			}
 
 			sort(lit.lAddresses.begin(), lit.lAddresses.end());

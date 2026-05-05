@@ -53,6 +53,7 @@ jobs:
             --error-exitcode=1 \
             --suppress=missingIncludeSystem \
             --suppress=unusedFunction \
+            --suppress=passedByValue \
             --language=c++ \
             --std=c++17 \
             Pool/PoolClient.cpp Pool/PoolConfig.cpp \

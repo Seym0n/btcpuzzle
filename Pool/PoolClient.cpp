@@ -29,8 +29,8 @@ void logToFile(int gpuIndex, const std::string& msg) {
 }
 
 PoolClient::PoolClient(const PoolConfig& cfg)
-	: config(cfg), curl(nullptr), publicKey(nullptr),
-	rangesScanned(0), keysFound(0), shouldPing(false) {}
+	: config(cfg), curl(nullptr), publicKey(nullptr), secureHandler(nullptr),
+	rangesScanned(0), keysFound(0), startTime(0), shouldPing(false) {}
 
 PoolClient::~PoolClient() {
 
@@ -324,6 +324,8 @@ std::string PoolClient::extractJsonValue(const std::string& json, const std::str
 
 	pos += searchKey.length();
 	while (pos < json.length() && isspace(json[pos])) pos++;
+
+	if (pos >= json.length()) return "";
 
 	if (json[pos] == '"') {
 		pos++;

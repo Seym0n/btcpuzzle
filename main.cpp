@@ -53,14 +53,6 @@ PoolConfig g_poolConfig;
 
 using namespace std;
 
-#ifdef WITH_GPU
-if (gpuId.size() > 0) {
-	// Get GPU name from CUDA
-	cudaDeviceProp deviceProp;
-	cudaGetDeviceProperties(&deviceProp, gpuId[0]);
-	gpuName = std::string(deviceProp.name);
-}
-#endif
 
 // File logger
 extern std::mutex logMutex;
@@ -572,7 +564,7 @@ int main(int argc, char* argv[]) {
 
 	std::string poolConfFile = "pool.conf";
 
-	g_poolConfig = PoolConfig::loadFromFile(poolConfFile.c_str());
+	g_poolConfig = PoolConfig::loadFromFile(poolConfFile);
 
 	while (a < argc) {
 
@@ -741,7 +733,7 @@ int main(int argc, char* argv[]) {
 
 	// Get GPU name
 	GPUEngine g(0, 0, currentGpuIndex, 0);
-	std::string text = g.deviceName.c_str();
+	std::string text = g.deviceName;
 	std::regex re(R"(GPU #\d+\s+(.*?)\s+\()");
 	std::smatch match;
 	if (std::regex_search(text, match, re)) {
@@ -807,7 +799,7 @@ int main(int argc, char* argv[]) {
 			printf("[*] Target Address: %s\n", rangeData.targetAddress.c_str());
 			printf("[*] Range Start: %s\n", rangeData.rangeStart.c_str());
 			printf("[*] Range End: %s\n", rangeData.rangeEnd.c_str());
-			printf("[*] Proof addresses: %lu\n", rangeData.proofOfWorkAddresses.size());
+			printf("[*] Proof addresses: %zu\n", rangeData.proofOfWorkAddresses.size());
 			printf("========================================\n");
 
 			logMessage(SUCCESS, ("[++] Address file: " + filePathData).c_str());
@@ -905,7 +897,7 @@ int main(int argc, char* argv[]) {
 				// Get proof keys
 				auto proofKeys = client.getProofKeys(rangeData);
 
-				printf("[**] Submitting range with %lu proof keys...\n", proofKeys.size());
+				printf("[**] Submitting range with %zu proof keys...\n", proofKeys.size());
 
 				// Submit to pool with retry
 				bool submitted = false;
